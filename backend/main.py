@@ -874,7 +874,13 @@ class PushCodeContextRequest(BaseModel):
     code: str
     language: str
     phase: str
-    tavus_api_key: str
+    # NOTE: tavus_api_key is intentionally NOT accepted from the client.
+    # The backend reads TAVUS_API_KEY from its own environment.
+
+
+class CreateConversationRequest(BaseModel):
+    candidate_name: str
+    vibe: str  # "griller" | "mentor" | "behavioral"
 
 
 @app.post("/api/push-code-context")
@@ -935,29 +941,97 @@ async def push_code_context(req: PushCodeContextRequest):
         f"Do NOT read the code verbatim — discuss it conversationally like a real interviewer."
     )
 
-    # ── PATCH Tavus conversation context ─────────────────────────────────
+    # ── PATCH Tavus conversation context (key read from server env) ───────
     tavus_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.patch(
-                f"https://tavusapi.com/v2/conversations/{req.conversation_id}",
-                headers={
-                    "x-api-key": req.tavus_api_key,
-                    "Content-Type": "application/json",
-                },
-                json={"conversational_context": context_update},
-            )
-            tavus_ok = r.status_code in (200, 204)
-            if not tavus_ok:
-                print(f"[Tavus PATCH] {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        print(f"[Tavus PATCH] Exception: {e}")
+    if TAVUS_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.patch(
+                    f"https://tavusapi.com/v2/conversations/{req.conversation_id}",
+                    headers={
+                        "x-api-key": TAVUS_API_KEY,   # ← from .env, never from client
+                        "Content-Type": "application/json",
+                    },
+                    json={"conversational_context": context_update},
+                )
+                tavus_ok = r.status_code in (200, 204)
+                if not tavus_ok:
+                    print(f"[Tavus PATCH] {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            print(f"[Tavus PATCH] Exception: {e}")
 
     return {
         "status": "ok",
         "snapshot_count": len(_code_snapshots[req.session_id]),
         "tavus_context_updated": tavus_ok,
     }
+
+
+# ── CREATE TAVUS CONVERSATION (server-side, key never leaves backend) ─────────
+
+VIBE_PERSONAS = {
+    "griller":   {"replica_id": "r79e1c033f", "persona_id": "p1a2b3c4d5"},
+    "mentor":    {"replica_id": "r79e1c033f", "persona_id": "p1a2b3c4d5"},
+    "behavioral":{"replica_id": "r79e1c033f", "persona_id": "p1a2b3c4d5"},
+}
+
+@app.post("/api/create-conversation")
+async def create_conversation(req: CreateConversationRequest):
+    """
+    Create a Tavus conversation server-side.
+    The TAVUS_API_KEY is read from the backend .env — it is never sent to the
+    browser or included in any response.
+    """
+    if not TAVUS_API_KEY:
+        # Demo mode — no Tavus key configured
+        return {
+            "conversation_id": None,
+            "conversation_url": "https://demo.daily.co/hello",
+            "demo_mode": True,
+        }
+
+    persona = VIBE_PERSONAS.get(req.vibe, VIBE_PERSONAS["mentor"])
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                "https://tavusapi.com/v2/conversations",
+                headers={
+                    "x-api-key": TAVUS_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "replica_id":             persona["replica_id"],
+                    "persona_id":             persona["persona_id"],
+                    "conversational_context": (
+                        f"You are interviewing {req.candidate_name}. "
+                        f"Interview style: {req.vibe}."
+                    ),
+                    "custom_greeting":        f"Hello {req.candidate_name}! Let's begin your interview.",
+                    "properties": {"max_call_duration": 3600},
+                },
+            )
+            if r.status_code in (200, 201):
+                data = r.json()
+                return {
+                    "conversation_id": data.get("conversation_id"),
+                    "conversation_url": data.get("conversation_url"),
+                    "demo_mode": False,
+                }
+            else:
+                print(f"[Tavus CREATE] {r.status_code}: {r.text[:300]}")
+                return {
+                    "conversation_id": None,
+                    "conversation_url": "https://demo.daily.co/hello",
+                    "demo_mode": True,
+                }
+    except Exception as e:
+        print(f"[Tavus CREATE] Exception: {e}")
+        return {
+            "conversation_id": None,
+            "conversation_url": "https://demo.daily.co/hello",
+            "demo_mode": True,
+        }
 
 
 @app.post("/api/code-snapshot")

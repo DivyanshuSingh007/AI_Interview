@@ -3,11 +3,11 @@ from dotenv import load_dotenv; load_dotenv()
 import os, httpx, json, time
 
 gemini_key = os.getenv('GEMINI_API_KEY', '')
-tavus_key  = 'f5d1aa483abf4b0881d3d8089809cc34'
+tavus_key  = os.getenv('TAVUS_API_KEY', '')
 
 print("Keys loaded:")
 print(" Gemini:", gemini_key[:12] + "..." if gemini_key else "MISSING")
-print(" Tavus: ", tavus_key[:12] + "...")
+print(" Tavus: ", tavus_key[:12] + "..." if tavus_key else "MISSING")
 
 # ── 1) Gemini Profile Extraction ─────────────────────────────────────────────
 print("\n=== TEST 1: Gemini Profile Extraction ===")
